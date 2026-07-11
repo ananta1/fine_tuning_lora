@@ -1,0 +1,15 @@
+# Required packages for building the domain AI assistant with Unsloth
+unsloth
+unsloth_zoo
+torch
+trl
+peft
+transformers
+accelerate
+bitsandbytes
+xformers
+datasets
+huggingface_hub
+python-dotenv
+requests
+
