@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 # Load environment variables from .env
 load_dotenv()
 
-HF_API_URL = os.getenv("HF_API_URL", "https://dexq42rvmzmwby14.us-east-1.aws.endpoints.huggingface.cloud")
+HF_API_URL = os.getenv("HF_API_URL")
 HF_TOKEN = os.getenv("HF_TOKEN")
 
 # Prompt template mapping SFT/DPO formats
@@ -70,7 +70,7 @@ def generate_answer(question: str) -> str:
 
 if __name__ == "__main__":
     # Example execution per assignment criteria
-    question = "Why is the Subscribe button greyed out on my Profile page?"
+    question = "Can I use password reset if I registered with Google?"
     print(f"\n❓ Question: {question}")
     print("🔄 Sending request to Hugging Face Inference Endpoint...")
     answer = generate_answer(question)
