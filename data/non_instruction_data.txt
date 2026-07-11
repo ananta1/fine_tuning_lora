@@ -1,0 +1,102 @@
+Practice Your Speech (practiceyourspeech.com) is an advanced, AI-driven software-as-a-service (SaaS) platform designed to evaluate and improve public speaking and speech delivery. By combining audio transcript extraction, video-based facial emotion detection, and high-level large language model (LLM) processing, the platform simulates the feedback of a professional Toastmaster evaluator. It serves four distinct client personas: independent public speakers, students, educators/coaches, and speech competition organizers.
+
+The application coordinates the frontend user experience with backend processing via a structured, five-stage lifecycle: authentication and onboarding, secure media ingestion, automated multimodal pipelines, a Toastmaster evaluation engine, and collaborative classrooms or competitions. Users register and log in via native credentials (with email verification) or Google OAuth. Based on their designated role, they are granted customized dashboard capabilities to view, share, or grade speeches.
+
+To upload heavy video files efficiently, the client browser queries the backend API, which returns a secure S3 pre-signed upload URL. The browser then uploads the video file directly to Amazon S3. This minimizes backend compute overhead and prevents API Gateway timeouts that would normally occur during heavy binary transfers. Once the file is stored in S3, the user initiates the analysis pipeline.
+
+The serverless backend validated the user's subscription limits prior to starting any analysis jobs. The default Free Plan is assigned automatically upon registration, granting a lifetime quota of 5 speech evaluations. The Pro Plan ($15/month) grants 25 speech evaluations per billing month. If the user has remaining credits, the backend triggers AWS Transcribe for speech-to-text and AWS Rekognition for facial expression analysis.
+
+The media processing services run asynchronously on AWS. While the transcription and facial tracking jobs are active in the cloud, the backend marks the video's database state as IN_PROGRESS. The React client polls the status API periodically to check if the evaluation is complete. This asynchronous pipeline ensures the website UI remains responsive and does not freeze during computational analysis.
+
+When AWS Transcribe and AWS Rekognition finish processing, the backend fetches the results. It computes delivery metrics such as Words Per Minute, pause occurrences, and low-confidence words, while compiling facial emotion distributions. It then builds a detailed text prompt containing these metrics and sends it to Amazon Bedrock (Nova Lite) to generate structured Toastmaster feedback.
+
+The output of Amazon Bedrock is formatted as a structured JSON report that follows a template stored in the database. The JSON structure includes an executive summary, thesis clarity review, strengths (glows), growth targets (grows), chronological feedback (introduction, conclusion, storytelling, organization, rhetorical devices), grammar checks, and specific rephrasing suggestions.
+
+To drive adoption in schools, debate teams, and corporate coaching programs, the platform features virtual classrooms. Instructors create classrooms, which automatically generates a unique class access code. Students use this access code to join the class, linking their profiles to the instructor's dashboard. Instructors can then view student speech metrics, review video evaluations, and assign custom grades.
+
+Virtual classrooms allow instructors to override the default Toastmaster evaluation template. They can define focus rubrics, such as prioritizing filler word reduction for beginners or complex rhetorical structure for advanced debaters. The backend injects these custom criteria into the Bedrock prompt during analysis, ensuring students receive feedback tailored to their course curriculum.
+
+Instructors can send direct coaching feedback to students using the /send-coach-email endpoint. The backend coordinates with Amazon Simple Email Service (SES) to deliver structured evaluations and encouraging advice directly to student email addresses. This creates an asynchronous loop of review and correction between instructors and students.
+
+Speech competition organizers can host public or private speech contests on the platform. Participants register under a specific competition ID and submit their speech videos to the contest. The system automatically processes the speech, scores it, and displays the user's rank on a dynamic leaderboard. This gamifies the public speaking learning experience and builds competitive confidence.
+
+The backend is built entirely on a serverless architecture using Amazon Web Services (AWS). A single monolithic AWS Lambda function written in Python 3.12 processes all REST API endpoints. The function is fronted by an Amazon API Gateway REST API. The AWS Lambda Powertools framework is utilized for structured logging, tracing, and middleware injection, allowing developers to monitor system metrics.
+
+For local development and testing, a local Flask server (server.py) wraps the Lambda handler's logic. It reads a local .env configuration file, allowing developers to invoke, debug, and iterate on endpoints locally without deploying code to AWS. This speeds up iteration times and prevents developers from incurring active AWS runtime costs during testing.
+
+Static hosting for the React.js client (bootstrapped with Vite) is handled via Amazon S3 website hosting. The static website assets are fronted by an Amazon CloudFront CDN distribution to achieve global latency minimization. Secure SSL encryption is enforced via AWS ACM (Certificate Manager) certificates, and DNS routing is resolved by Amazon Route 53.
+
+Amazon DynamoDB is utilized as the primary NoSQL database. Single-key and composite-key designs are optimized for rapid query resolution. The SpeechUsers table stores student, instructor, and admin profiles, using a Global Secondary Index (EmailIndex) to enable rapid login resolution based on user emails.
+
+The SpeechVideos table stores records of uploaded videos and analysis reports, using composite keys (userId as partition key, videoKey as sort key). It tracks the video status (IN_PROGRESS, COMPLETED, or FAILED) and contains the nested JSON map of the Toastmaster report. This ensures that a user can quickly list their historical reports without scanning the entire table.
+
+User billing plan details are tracked in the SpeechSubscriptions table. Key attributes include stripeCustomerId, subscription status, plan tier (free or pro), subscription end date, and the monthly speech count. The monthly evaluation counter (num_valuations) is reset automatically upon Stripe monthly invoice payment confirmation.
+
+Stripe integration enables secure payments for the Pro subscription. User upgrade requests trigger the /create-checkout-session endpoint, which redirects the client browser to a Stripe-hosted payment portal. Upon successful payment, Stripe redirects the browser to the profile page and fires a webhook event to update the database.
+
+Stripe Webhooks are mapped to the /stripe-webhook API endpoint. When a customer pays a monthly renewal invoice, Stripe fires the invoice.payment_succeeded event. The backend intercepts this webhook, matches the user ID, and resets the num_valuations counter to 0, granting the user 25 new speech evaluation credits for the new billing cycle.
+
+If a customer cancels their subscription or a payment fails, Stripe fires the customer.subscription.deleted event. The backend automatically updates the user's plan state in DynamoDB to 'free'. While historical speech evaluations are preserved and remain viewable, the user is blocked from uploading new videos if they have exceeded the Free lifetime limit.
+
+A known billing bug exists in the /verify-payment endpoint due to DynamoDB's lack of native support for Python float types. When Stripe returns subscription values or dates as floats, attempting to save them directly to DynamoDB crashes the put_item call with a serialization error. To bypass this, the backend must convert all floats to Decimal wrappers.
+
+A common frontend issue exists on the Profile dashboard where the checkout button is hard-disabled (disabled={true}) and is visually labeled 'Subscribe - $7/month'. This mismatch blocks users from upgrading to the Pro Plan. Support agents must manually upgrade users using the Admin Portal tools while the self-service portal is undergoing maintenance.
+
+The Admin Portal allows super admins to promote students to instructors using the /promote-user endpoint. It also allows admins to update speech quotas using the /update-speech-quota endpoint. This manual bypass is essential for onboarding enterprise users or resolving payment sync blocks caused by Stripe webhook delays.
+
+When AWS Transcribe completes, the system computes delivery heuristics. Words Per Minute (WPM) is calculated by taking the count of pronunciation items in the transcription output and dividing by the speaking duration. Duration is calculated as: Last Word End Time - First Word Start Time. The optimal WPM target for public speaking is 130 to 150 WPM.
+
+Pacing is a key indicator of presentation delivery. If a speaker talks too fast (above 160 WPM), the audience struggles to digest the information. If they speak too slowly (under 110 WPM), the audience may lose focus. By tracking real-time WPM, the AI assistant helps speakers identify their pacing habits and learn to speak at a conversational rate.
+
+Pause Frequency is calculated by scanning the timestamps of sequential words in the transcription JSON. A pause is flagged if the gap between the end time of word N and the start time of word N+1 exceeds 0.5 seconds. Pauses are categorized as meaningful pauses or hesitation flags, helping speakers identify if their pauses add rhetorical value or represent nervousness.
+
+Silent pauses are an effective tool in public speaking. Experienced speakers use deliberate silence before or after a major point to build suspense and let key concepts sink in. In contrast, hesitation pauses (filled with silence while the speaker struggles to remember the next line) can break flow. The AI analysis flags these gaps so speakers can review them.
+
+Pronunciation Clarity Score is calculated based on AWS Transcribe's word-level confidence scores. The system flags words falling below a confidence threshold of 0.85 as 'low-confidence words'. The final Clarity Score represents the percentage of total words that exceed this threshold, highlighting potential issues with articulation or audio quality.
+
+Low pronunciation clarity can be caused by slurring words, speaking too fast, or background noise. If a speaker's clarity score is low, support should recommend using an external microphone and recording in a quiet room. Articulating consonants and slowing down the pacing can also significantly improve the clarity score.
+
+Filler Word Detection evaluates the transcribed text using a regex compiler. It looks for common verbal fillers: 'ah', 'uh', 'um', 'like', 'so', 'you know', 'actually', and 'basically'. The system compiles the count and percentage of filler words, helping speakers identify their repetitive verbal habits.
+
+Filler words are speech behaviors used by speakers to fill silence while they think of what to say next. While a few fillers are natural, excessive fillers (above 2% of total words) can distract the audience and reduce the speaker's authority. The assistant recommends replacing filler words with silent pauses.
+
+Visual Sentiment & Emotion Extraction is performed using AWS Rekognition. The service monitors the speaker's facial expressions frame-by-frame. It extracts emotions such as HAPPY, CALM, ANGRY, SAD, FEAR, SURPRISE, CONFUSED, and DISGUSTED. The backend aggregates these counts to identify the dominant facial expression (primaryEmotion).
+
+Facial expression analysis helps speakers check if their body language matches their message. For example, if a speaker is giving a serious presentation but has a primaryEmotion of happy or confused, it indicates a mismatch. Emotional congruence builds trust with the audience, and tracking these metrics helps speakers improve facial presence.
+
+Amazon Bedrock (Nova Lite) acts as the cognitive layer of the platform. The backend constructs a prompt containing the transcription, pacing metrics, pause occurrences, clarity score, and facial emotions. It instructs the model to act as an elite Toastmaster evaluator and return a structured feedback report.
+
+The Bedrock evaluation criteria include checking the introduction's hook, thesis clarity, storytelling, body organization, rhetorical devices, and conclusion impact. It also performs a grammar check and recommends rephrasings for weak passages. This detailed critique simulates the feedback of a personal speech coach.
+
+When a speech video is stuck in the IN_PROGRESS status for more than 10 minutes, it indicates that the processing pipeline failed. This can happen due to AWS Transcribe timeouts, Rekognition rate limits, or Bedrock API throttling. Support agents can diagnose this by scanning for stuck videos in the database.
+
+Support engineers use the reprocess_stuck_video.py script to resolve stuck videos. The script checks the status of the underlying AWS Transcribe and Rekognition jobs. If the AWS jobs completed successfully, the script resets the status in DynamoDB to allow the next client poll to trigger Bedrock and complete the analysis.
+
+If the underlying AWS jobs failed or are missing, running the reprocess script with the --force-restart flag will re-submit the speech video to AWS. This restarts the transcription and facial tracking pipeline from scratch. This manual override ensures that user videos do not remain stuck forever without consuming additional user quota.
+
+Amazon Bedrock runtime calls can fail with a ResourceNotFoundException if the AWS account holder has not submitted the Anthropic use case details form in the AWS Console. This licensing restriction blocks the InvokeModel operation. The administrator must log into the AWS console and complete the form to restore Bedrock access.
+
+Public speaking anxiety, commonly known as stage fright, is caused by the body's natural fight-or-flight response. Adrenaline increases heart rate and speeds up pacing. The AI assistant helps speakers build confidence by simulating the presentation environment, allowing them to practice until their delivery becomes muscle memory.
+
+To manage stage fright, speakers are encouraged to reframe their nervous energy as excitement. Adrenaline provides focus and enthusiasm if channeled correctly. Deep breathing before speaking and focusing on delivering the message to individual audience members can also calm public speaking nerves.
+
+Rehearsing out loud is critical for speech preparation. Public speaking experts recommend practicing a presentation at least 10 times. The first few rounds help you internalize the content outline, while the later rounds allow you to focus on delivery mechanics, vocal variety, and visual eye contact.
+
+Mirror practice provides instant feedback on posture and hand gestures, but it can be highly distracting because the speaker self-corrects in real-time. Video recording is a superior rehearsal method because it allows the speaker to watch their performance objectively as an audience member after the speech is complete.
+
+Memorizing a speech word-for-word is not recommended by public speaking professionals. It often leads to a robotic delivery and increases panic if a single word is forgotten. Instead, speakers should memorize only their Opening, Closing, and key Transitions, using a bulleted outline for the middle sections to maintain a conversational tone.
+
+Technical presentations can become dry and disengaging if they focus too heavily on data points. To maintain engagement, speakers should follow the 10-20-30 PowerPoint Rule: no more than 10 slides, lasting no more than 20 minutes, with a font size no smaller than 30 points. This forces clarity and prevents text-heavy slides.
+
+Connecting with the audience requires effective storytelling. A strong introduction hook, such as a surprising statistic, a rhetorical question, or a brief personal story, immediately captures attention. The conclusion should summarize the key message and end with a clear, memorable call to action.
+
+The future product roadmap for Practice Your Speech includes context-aware evaluations. Instead of generic Toastmaster feedback, users will select a speech context, such as a Job Interview, TED Talk, or Sales Pitch. The AI prompt will automatically adjust its criteria, rewarding professional vocabulary or brevity accordingly.
+
+Advanced vocabulary and structural text parsing are also planned roadmap features. The engine will detect action verbs, persuasive power words, and structural markers such as transitions and call to actions. It will compute a listenability index to flag long run-on sentences and complex vocabulary.
+
+Visual body language tracking will expand in subsequent phases using AWS Rekognition and custom webcam gaze estimators. The platform will monitor eye contact heatmaps, smile congruence, posture shifts, and nervous hand fidgeting. This will give speakers feedback on their physical delivery and presence.
+
+Advanced acoustic analytics are planned to track volume dynamics and pitch variance. The engine will detect monotone delivery, whisper segments, and voice trailing off at the end of sentences. It will also separate rhetorical silence from hesitation silence to provide a more accurate pause analysis.
+
+Finally, the roadmap features AI audience personas. Users will be able to select different AI reviewers to critique their speech. These personas will include the Cheerleader (focused on positive reinforcement), the Drill Sergeant (highly critical of fillers and pacing), and the Executive Investor (focused purely on brevity and bottom-line impact).
+
